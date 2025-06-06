@@ -64,3 +64,6 @@ class Dice:
 			return f'Weighted D{self.sides} with Weights{self.weights} Seeded with {self.seed}'
 		else:
 			return f'Unbiased D{self.sides} Seeded with {self.seed}'
+
+# Dice Registry
+dice_registry = {}
