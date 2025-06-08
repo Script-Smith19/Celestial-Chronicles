@@ -1,2 +1,8 @@
+# Ignore Virtual Environment
+# Ignore Python virtual environments
 .venv
 *.code-workspace
+
+
+# Ignore Configuration files for GameData
+.GameData/
