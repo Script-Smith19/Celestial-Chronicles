@@ -66,4 +66,4 @@ class Dice:
 			return f'Unbiased D{self.sides} Seeded with {self.seed}'
 
 # Dice Registry
-dice_registry = {}
+DiceRegistry = {}

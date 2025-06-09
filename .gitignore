@@ -3,6 +3,15 @@
 .venv
 *.code-workspace
 
+# Ignore Python cache files
+__pycache__/
+
+# Ignore Python bytecode files
+*.pyc
+
+
+
 
 # Ignore Configuration files for GameData
 .GameData/
+.Temp/
