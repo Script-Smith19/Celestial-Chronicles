@@ -2,6 +2,7 @@ from pathlib import Path
 import yaml
 from typing import Optional
 from graph_utils import toposort, build_reverse_graph, get_all_descendants
+from Field_utits import HasField, GetField, flatten_fields, to_dict
 
 
 GameData = Path('.GameData')
@@ -14,6 +15,18 @@ CharacterSchemas.mkdir(exist_ok=True)
 
 CharacterSchemaRegistry = {}
 CharacterRegistry = {}
+
+SchemasGraph = {name: schema.Extends for name, schema in CharacterSchemaRegistry.items()}
+SchemasReverseGraph = build_reverse_graph(SchemasGraph)
+Schemas = toposort(SchemasGraph)
+
+from enum import IntEnum
+
+class SchemaValidationCode(IntEnum):
+    UNACCEPTABLE = 0
+    INVALID = 1
+    VALID = 2
+
 
 class CharacterSchema:
 	def __init__(self, name: str):
@@ -37,6 +50,9 @@ class CharacterSchema:
 			if name not in CharacterSchemaRegistry:
 				cls(name)
 
+
+CharacterSchema.loadAll()
+
 class Character:
 	def __init__(self, name: str, mode: Optional[str] = 'load'):
 		if mode.lower() not in ['load', 'create']:
@@ -52,16 +68,11 @@ class Character:
 
 		CharacterRegistry[self.Name] = self
 
-	def to_dict(self):
-		return {
-			key: value
-			for key, value in self.__dict__.items()
-			if not key.startswith('_')
-		}
+
 	
 	def save(self):
 		with self._file_path.open('w') as file:
-			yaml.dump(self.to_dict(), file, allow_unicode=True)
+			yaml.dump(to_dict(self), file, allow_unicode=True)
 
 	def load(self):
 		with self._file_path.open('r') as file:
@@ -69,66 +80,59 @@ class Character:
 			for key, value in data.items():
 				setattr(self, key, value)
 
-	def ValidateSchema(self, schema: CharacterSchema):
+	def ValidateSchema(self, schema: CharacterSchema) -> tuple[SchemaValidationCode, set]:
 		ValidatedFields = set()
 		MissingFields = set()
+		IsCoreSchema = False if not schema.Extends else True
 
-		if not schema.Extends:
-			IsCoreSchema = False
-		else:
-			IsCoreSchema = True
-		
 		for field in schema.Mandatory:
-			if hasattr(self, field):
+			if HasField(self, field):
 				ValidatedFields.add(field)
 			else:
 				MissingFields.add(field)
-		
+
 		for field in schema.Optional:
-			if hasattr(self, field):
-				ValidatedFields.add(field)
-		
-		for field in schema.AnyOf:
-			if not any(hasattr(self, opt) for opt in field):
-				MissingFields.add(field)
-			elif hasattr(self, field):
-				ValidatedFields.add(field)
-			else:
-				pass
+			if HasField(self, field): ValidatedFields.add(field)
 
-		if IsCoreSchema and len(MissingFields) > 0:
-			return 0, ValidatedFields, MissingFields
-		if len(MissingFields) > 0 and len(ValidatedFields) == 0:
-			return 1, ValidatedFields, MissingFields
-		if len(MissingFields) > 0 and len(ValidatedFields) != 0:
-			return 0, ValidatedFields, MissingFields
+		if not any(HasField(self, field) for field in schema.AnyOf):
+			MissingFields.update(schema.AnyOf)
+		else:
+			for field in schema.AnyOf:
+				if HasField(self, field): ValidatedFields.add(field)
+
 		if len(MissingFields) == 0:
-			return 2, ValidatedFields, MissingFields
-		
-		# if 0 is returned, then the character is in a unacceptable state
-		# if 1 is returned, then the schema is invalid but if we drop this schema and those that it extends then the character is in a acceptable state
-		# if 2 is returned, then the schema is valid and the character is in a acceptable state
+			ValidationCode = SchemaValidationCode.VALID
+		elif IsCoreSchema or len(ValidatedFields) != 0:
+			ValidationCode = SchemaValidationCode.UNACCEPTABLE
+		elif len(ValidatedFields) == 0:
+			ValidationCode = SchemaValidationCode.INVALID
+		else:
+			raise AssertionError("unreachable")
 
-def Validate(self):
-	Schemas = toposort({
-		name: schema.Extends for name, schema in CharacterSchemaRegistry.items()
-	})
-	reverse_graph = build_reverse_graph({
-		name: schema.Extends for name, schema in CharacterSchemaRegistry.items()
-	})
+		return ValidationCode, ValidatedFields
 
-	DroppedSchemas = set()
-	ValidFields = set()
+	def ValidatePresenceOfFields(self):
+		DroppedSchemas = set()
+		ValidFields = set()
 
-	for schema_name in Schemas:
-		if schema_name in DroppedSchemas:
-			continue
+		ValidationSuccess = True
 
-		ErrorCode, ValidatedFields, MissingFields = self.ValidateSchema(CharacterSchemaRegistry[schema_name])
+		for schema in Schemas:
+			if schema in DroppedSchemas:
+				continue
 
-		if ErrorCode == 2:
-			ValidFields |= ValidatedFields
-		elif ErrorCode == 1:
-			DroppedSchemas |= get_all_descendants(schema_name, reverse_graph)
-		elif ErrorCode == 0:
-			raise ValueError(f"Character '{self.Name}' is in an unacceptable state due to missing fields: {MissingFields}")
+			Status, ValidatedFields = self.ValidateSchema(CharacterSchemaRegistry[schema])
+
+			if Status == SchemaValidationCode.VALID:
+				ValidFields |= ValidatedFields
+			elif Status == SchemaValidationCode.INVALID:
+				DroppedSchemas |= get_all_descendants(schema, SchemasReverseGraph)
+			elif Status == SchemaValidationCode.UNACCEPTABLE:
+				ValidationSuccess = False
+
+		return ValidationSuccess, ValidFields
+
+	def ValidateExtraneousFields(self, ValidFields: set) -> set:
+		CharacterFields = flatten_fields(to_dict(self))
+		UndefinedFields = CharacterFields - ValidFields
+		return UndefinedFields
